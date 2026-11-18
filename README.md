@@ -81,11 +81,16 @@ Where $\bar{D}$ is average daily unit sales, $L$ is supplier lead time in days, 
 ### Prerequisites
 * Docker & Docker Compose
 
-### Step 1: Launch middleware, databases, Odoo init, seed, API & dashboard
-```bash
+### Step 1: One-command deploy (recommended on Windows)
+```powershell
 cd multi_warehouse_inventory_erp_middleware_readme.md
+.\deploy.ps1
+```
+Or manually:
+```bash
 docker compose up -d --build
 ```
+Free cloud + demo tunnels: see [docs/DEPLOY.md](docs/DEPLOY.md).
 The `odoo-init` job creates the **`inventory`** database with **stock** and **purchase** modules. The one-shot **`seed`** service loads demo warehouses/SKUs and maps Odoo products before **api** starts.
 
 First boot can take several minutes while Odoo initializes. Watch progress with `docker compose logs -f odoo-init odoo seed`.
