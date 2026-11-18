@@ -1,0 +1,144 @@
+services:
+  inventory-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: inventory
+      POSTGRES_DB: inventory
+    ports:
+      - "5433:5432"
+    volumes:
+      - inventory_pg:/var/lib/postgresql/data
+      - ./sql/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ./sql/002_ops_mfa.sql:/docker-entrypoint-initdb.d/002_ops_mfa.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory -d inventory"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  odoo-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+      POSTGRES_DB: postgres
+    volumes:
+      - odoo_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  odoo-init:
+    image: odoo:17
+    depends_on:
+      odoo-db:
+        condition: service_healthy
+    environment:
+      HOST: odoo-db
+      USER: odoo
+      PASSWORD: odoo
+      ODOO_DB: inventory
+    volumes:
+      - odoo_data:/var/lib/odoo
+      - ./scripts/odoo_db_init.sh:/odoo_db_init.sh:ro
+    entrypoint: ["/bin/bash", "/odoo_db_init.sh"]
+    restart: "no"
+
+  odoo:
+    image: odoo:17
+    command: ["odoo", "-d", "inventory"]
+    depends_on:
+      odoo-db:
+        condition: service_healthy
+      odoo-init:
+        condition: service_completed_successfully
+    ports:
+      - "8069:8069"
+    environment:
+      HOST: odoo-db
+      USER: odoo
+      PASSWORD: odoo
+    volumes:
+      - odoo_data:/var/lib/odoo
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8069/web/login >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+
+  seed:
+    build: .
+    command: python scripts/seed_inventory.py
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg://inventory:inventory@inventory-db:5432/inventory
+      ODOO_URL: http://odoo:8069
+      ODOO_DB: inventory
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+      odoo:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg://inventory:inventory@inventory-db:5432/inventory
+      ODOO_URL: http://odoo:8069
+      ODOO_DB: inventory
+    ports:
+      - "8000:8000"
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    command: python -m app.worker
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg://inventory:inventory@inventory-db:5432/inventory
+      ODOO_URL: http://odoo:8069
+      ODOO_DB: inventory
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+      odoo:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  dashboard:
+    build: .
+    command: streamlit run dashboard/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg://inventory:inventory@inventory-db:5432/inventory
+      API_BASE_URL: http://api:8000
+      OPS_USERNAME: opsadmin
+      OPS_PASSWORD: changeme
+    ports:
+      - "8501:8501"
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+
+volumes:
+  inventory_pg:
+  odoo_pg:
+  odoo_data:
